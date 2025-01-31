@@ -3,7 +3,6 @@ import { throttling } from '@octokit/plugin-throttling'
 import { Octokit } from '@octokit/rest'
 import fs from 'fs'
 import BaseStorage from 'ghost-storage-base'
-import isUrl from 'is-url'
 import path from 'path'
 import util from 'util'
 import { URL } from 'url'
@@ -33,7 +32,7 @@ class GitHubStorage extends BaseStorage {
 
         // Optional config
         const baseUrl = utils.removeTrailingSlashes(process.env.GHOST_STORAGE_GITHUB_BASE_URL || config.baseUrl || '')
-        this.baseUrl = isUrl(baseUrl)
+        this.baseUrl = utils.isValidURL(baseUrl)
             ? baseUrl
             : `${RAW_GITHUB_URL}/${this.owner}/${this.repo}/${this.branch}`
         this.destination = process.env.GHOST_STORAGE_GITHUB_DESTINATION || destination || '/'

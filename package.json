@@ -1,6 +1,6 @@
 {
   "name": "ghost-storage-github",
-  "version": "2.0.2",
+  "version": "3.0.0",
   "description": "GitHub storage adapter for Ghost",
   "homepage": "https://github.com/ifvictr/ghost-storage-github#readme",
   "bugs": {
@@ -16,30 +16,29 @@
     "email": "victor@victortruong.com",
     "url": "https://victortruong.com"
   },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "main": "./build/index.js",
   "files": [
     "build/"
   ],
   "scripts": {
-    "build": "yarn clean && babel ./src --out-dir ./build",
+    "build": "npm run clean && babel ./src --out-dir ./build",
     "clean": "rm -rf ./build && mkdir ./build",
-    "prepublish": "yarn build",
+    "prepublish": "npm run build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "@octokit/plugin-retry": "^3.0.7",
-    "@octokit/plugin-throttling": "^3.4.1",
-    "@octokit/rest": "^18.5.2",
-    "ghost-storage-base": "^0.0.5",
-    "is-url": "^1.2.4"
+    "@octokit/plugin-retry": "^7.1.3",
+    "@octokit/plugin-throttling": "^9.4.0",
+    "@octokit/rest": "^21.1.0",
+    "ghost-storage-base": "^1.1.1"
   },
   "devDependencies": {
     "@babel/cli": "^7.13.14",
     "@babel/core": "^7.13.14",
     "@babel/preset-env": "^7.13.12",
     "babel-plugin-add-module-exports": "^1.0.4"
-  },
-  "engines": {
-    "node": ">=10.0.0"
   }
 }
