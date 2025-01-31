@@ -1,148 +1,133 @@
-import { retry } from '@octokit/plugin-retry'
-import { throttling } from '@octokit/plugin-throttling'
-import { Octokit } from '@octokit/rest'
-import fs from 'fs'
-import BaseStorage from 'ghost-storage-base'
-import path from 'path'
-import util from 'util'
-import { URL } from 'url'
-import * as utils from './utils'
+import { Octokit } from '@octokit/rest';
+import { retry } from '@octokit/plugin-retry';
+import { throttling } from '@octokit/plugin-throttling';
+import fs from 'fs/promises';
+import BaseStorage from 'ghost-storage-base';
+import path from 'path';
+import { URL } from 'url';
+import * as utils from './utils';
 
-const ExtendedOctokit = Octokit.plugin(retry, throttling)
-const readFile = util.promisify(fs.readFile)
-
-const RAW_GITHUB_URL = 'https://raw.githubusercontent.com'
+const ExtendedOctokit = Octokit.plugin(retry, throttling);
+const RAW_GITHUB_URL = 'https://raw.githubusercontent.com';
 
 class GitHubStorage extends BaseStorage {
-    constructor(config) {
-        super()
+    owner;
+    repo;
+    branch;
+    baseUrl;
+    destination;
+    useRelativeUrls;
+    client;
 
+    constructor(config) {
+        super();
+        
         const {
-            branch,
-            destination,
+            branch = 'master',
+            destination = '/',
             owner,
-            repo
-        } = config
+            repo,
+            baseUrl = '',
+            useRelativeUrls = false,
+            token = process.env.GHOST_STORAGE_GITHUB_TOKEN || config.token
+        } = config;
 
         // Required config
-        const token = process.env.GHOST_STORAGE_GITHUB_TOKEN || config.token
-        this.owner = process.env.GHOST_STORAGE_GITHUB_OWNER || owner
-        this.repo = process.env.GHOST_STORAGE_GITHUB_REPO || repo
-        this.branch = process.env.GHOST_STORAGE_GITHUB_BRANCH || branch || 'master'
+        this.owner = process.env.GHOST_STORAGE_GITHUB_OWNER || owner;
+        this.repo = process.env.GHOST_STORAGE_GITHUB_REPO || repo;
+        this.branch = process.env.GHOST_STORAGE_GITHUB_BRANCH || branch;
 
         // Optional config
-        const baseUrl = utils.removeTrailingSlashes(process.env.GHOST_STORAGE_GITHUB_BASE_URL || config.baseUrl || '')
-        this.baseUrl = utils.isValidURL(baseUrl)
-            ? baseUrl
-            : `${RAW_GITHUB_URL}/${this.owner}/${this.repo}/${this.branch}`
-        this.destination = process.env.GHOST_STORAGE_GITHUB_DESTINATION || destination || '/'
-        this.useRelativeUrls = process.env.GHOST_STORAGE_GITHUB_USE_RELATIVE_URLS === 'true' || config.useRelativeUrls || false
+        const computedBaseUrl = utils.removeTrailingSlashes(process.env.GHOST_STORAGE_GITHUB_BASE_URL || baseUrl);
+        this.baseUrl = utils.isValidURL(computedBaseUrl)
+            ? computedBaseUrl
+            : `${RAW_GITHUB_URL}/${this.owner}/${this.repo}/${this.branch}`;
+
+        this.destination = process.env.GHOST_STORAGE_GITHUB_DESTINATION || destination;
+        this.useRelativeUrls = process.env.GHOST_STORAGE_GITHUB_USE_RELATIVE_URLS === 'true' || useRelativeUrls;
 
         this.client = new ExtendedOctokit({
             auth: token,
             throttle: {
                 onRateLimit: (retryAfter, options) => {
-                    console.warn(`Request quota exhausted for request ${options.method} ${options.url}`)
-                    if (options.request.retryCount < 3) { // Retry 3 times
-                        return true
-                    }
+                    console.warn(`Request quota exhausted for ${options.method} ${options.url}`);
+                    return options.request.retryCount < 3; // Retry up to 3 times
                 },
                 onAbuseLimit: (retryAfter, options) => {
-                    console.warn(`Abuse detected for request ${options.method} ${options.url}`)
+                    console.warn(`Abuse detected for ${options.method} ${options.url}`);
                 }
-            },
-        })
+            }
+        });
     }
 
-    delete() {
-        return Promise.reject('Not implemented')
-    }
+    async exists(filename, targetDir) {
+        const dir = targetDir || this.getTargetDir();
+        const filepath = this.getFilepath(path.join(dir, filename));
 
-    exists(filename, targetDir) {
-        const dir = targetDir || this.getTargetDir()
-        const filepath = this.getFilepath(path.join(dir, filename))
-
-        return this.client.repos.getContent({
-            method: 'HEAD',
-            owner: this.owner,
-            repo: this.repo,
-            ref: this.branch,
-            path: filepath
-        })
-            .then(res => true)
-            .catch(e => {
-                if (e.status === 404) {
-                    return false
-                }
-
-                // Just rethrow. This way, no assumptions are made about the file's status.
-                throw e
-            })
-    }
-
-    read(options) {
-        // NOTE: Implemented to address https://github.com/ifvictr/ghost-storage-github/issues/22
-        return new Promise((resolve, reject) => {
-            const req = utils.getProtocolAdapter(options.path).get(options.path, res => {
-                const data = []
-                res.on('data', chunk => {
-                    data.push(chunk)
-                })
-                res.on('end', () => {
-                    resolve(Buffer.concat(data))
-                })
-            })
-            req.on('error', reject)
-        })
-    }
-
-    save(file, targetDir) {
-        const dir = targetDir || this.getTargetDir()
-
-        return Promise.all([
-            this.getUniqueFileName(file, dir),
-            readFile(file.path, 'base64') // GitHub API requires content to use base64 encoding
-        ])
-            .then(([filename, data]) => {
-                return this.client.repos.createOrUpdateFileContents({
-                    owner: this.owner,
-                    repo: this.repo,
-                    branch: this.branch,
-                    message: `Create ${filename}`,
-                    path: this.getFilepath(filename),
-                    content: data
-                })
-            })
-            .then(res => {
-                const { path } = res.data.content
-                if (this.useRelativeUrls) {
-                    return `/${path}`
-                }
-
-                return this.getUrl(path)
-            })
-            .catch(e => {
-                // Stop failed attempts from preventing retries
-            })
-    }
-
-    serve() {
-        // No need to serve because absolute URLs are returned
-        return (req, res, next) => {
-            next()
+        try {
+            await this.client.repos.getContent({
+                method: 'HEAD',
+                owner: this.owner,
+                repo: this.repo,
+                ref: this.branch,
+                path: filepath
+            });
+            return true;
+        } catch (e) {
+            if (e.status === 404) return false;
+            throw e;
         }
     }
 
-    getUrl(filepath) {
-        const url = new URL(this.baseUrl)
-        url.pathname = `${utils.removeTrailingSlashes(url.pathname)}/${filepath}`
+    async read(options) {
+        return new Promise((resolve, reject) => {
+            const req = utils.getProtocolAdapter(options.path).get(options.path, res => {
+                const data = [];
+                res.on('data', chunk => data.push(chunk));
+                res.on('end', () => resolve(Buffer.concat(data)));
+            });
+            req.on('error', reject);
+        });
+    }
 
-        return url.toString()
+    async save(file, targetDir) {
+        const dir = targetDir || this.getTargetDir();
+        
+        try {
+            const filename = await this.getUniqueFileName(file, dir);
+            const data = await fs.readFile(file.path, 'base64'); // GitHub API requires base64 encoding
+            
+            const res = await this.client.repos.createOrUpdateFileContents({
+                owner: this.owner,
+                repo: this.repo,
+                branch: this.branch,
+                message: `Create ${filename}`,
+                path: this.getFilepath(filename),
+                content: data
+            });
+
+            return this.useRelativeUrls ? `/${res.data.content.path}` : this.getUrl(res.data.content.path);
+        } catch (e) {
+            console.error(`Failed to save file ${file.name}:`, e);
+            throw e; // Rethrow to ensure proper error handling
+        }
+    }
+
+    serve() {
+        return (req, res, next) => next(); // No need to serve since URLs are returned
+    }
+
+    getUrl(filepath) {
+        return new URL(filepath, this.baseUrl).toString();
     }
 
     getFilepath(filename) {
-        return utils.removeLeadingSlashes(path.join(this.destination, filename))
+        return utils.removeLeadingSlashes(path.join(this.destination, filename));
+    }
+
+    delete() {
+        return Promise.reject(new Error('Not implemented'));
     }
 }
 
-export default GitHubStorage
+export default GitHubStorage;
